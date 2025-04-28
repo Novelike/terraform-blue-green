@@ -42,9 +42,14 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# ─ Ubuntu 20.04 이미지 조회
+# ─ Ubuntu 24.04 이미지 조회
 data "openstack_images_image_v2" "ubuntu" {
-  name = "Ubuntu-20.04"
+  most_recent = true
+  visibility = "public"
+  properties = {
+    os_distro = "ubuntu"
+    os_version = "24.04"
+  }
 }
 
 # ─ Blue/Green VM 2대
