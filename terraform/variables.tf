@@ -95,10 +95,16 @@
     default     = "unique-suffix"
   }
 
-  variable "public_subnet_id" {
-    description = "서브넷 이름"
+  variable "network_id" {
+    description = "이미 존재하는 VPC 네트워크 ID (sfacspace-default)"
     type        = string
-    default     = "main"
+    default     = "7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
+  }
+
+  variable "subnet_id" {
+    description = "서브넷 id"
+    type        = string
+    default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b"
   }
 
   variable "dev_name" {
