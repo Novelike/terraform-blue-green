@@ -26,10 +26,10 @@
     default     = "kc-sfacspace"
   }
 
-  variable "network_name" {
-    description = "VM이 붙을 내부 네트워크 이름/ID"
+  variable "network_id" {
+    description = "내부 VPC 네트워크 ID (sfacspace-default)"
     type        = string
-    default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b_7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
+    default     = "7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
   }
 
   # 인스턴스 관련 변수
@@ -104,7 +104,7 @@
   variable "subnet_id" {
     description = "서브넷 ID (VPC 내의 실제 네트워크)"
     type        = string
-    default     = "97eca223-44eb-4a55-8082-aaa3686be094"
+    default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b"
   }
 
   variable "dev_name" {
