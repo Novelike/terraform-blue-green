@@ -16,17 +16,23 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# ── data 소스로 “main” 서브넷 조회 ──
+# ── 1) 데이터 소스로 VPC(네트워크) 조회 ──
+data "openstack_networking_network_v2" "vpc" {
+  name = var.network_name
+}
+
+# ── 2) 데이터 소스로 서브넷 조회 ──
 data "openstack_networking_subnet_v2" "main" {
-  id = var.subnet_id
+  name       = var.subnet_name
+  network_id = data.openstack_networking_network_v2.vpc.id
 }
 
-# ── data 소스로 External/Public 네트워크 조회 ──
-data "openstack_networking_networks_v2" "external" {
-  shared = true
+# ── 3) 데이터 소스로 External/Public 네트워크 조회 ──
+data "openstack_networking_network_v2" "external" {
+  external = true
 }
 
-# 1) 보안 그룹 생성 (SSH, HTTP)
+# ── 4) 보안 그룹 생성 (SSH/HTTP) ──
 resource "openstack_networking_secgroup_v2" "web_sg" {
   name        = "${var.dev_name}-sg"
   description = "Allow SSH(22) and HTTP(80)"
@@ -52,18 +58,18 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# 2) 내부망 Port 생성 (서브넷 → 이 Port 에 인스턴스 붙임)
+# ── 5) 내부망 Port 생성 (조회된 VPC + Subnet 적용) ──
 resource "openstack_networking_port_v2" "web_port" {
   name               = "${var.dev_name}-port"
-  network_id         = data.openstack_networking_subnet_v2.main.network_id
+  network_id         = data.openstack_networking_network_v2.vpc.id
   security_group_ids = [openstack_networking_secgroup_v2.web_sg.id]
 
   fixed_ip {
-    subnet_id = var.subnet_id
+    subnet_id = data.openstack_networking_subnet_v2.main.id
   }
 }
 
-# 3) VM 인스턴스 (volume-backed) – 위에서 만든 Port 에 바로 연결
+# ── 6) VM 인스턴스 (volume-backed) ──
 resource "openstack_compute_instance_v2" "web" {
   name              = "${var.dev_name}-web"
   image_id          = var.image_id
@@ -101,12 +107,12 @@ async def hello():\\
   EOF
 }
 
-# 4) Floating IP 생성 (첫 번째 shared 네트워크 ID 사용)
+# ── 7) Floating IP 생성 ──
 resource "openstack_networking_floatingip_v2" "public_ip" {
-  pool = data.openstack_networking_networks_v2.external.networks[0].id
+  pool = data.openstack_networking_network_v2.external.id
 }
 
-# 5) Floating IP → Port 연결
+# ── 8) Floating IP → Port 연결 ──
 resource "openstack_networking_floatingip_associate_v2" "assoc" {
   floating_ip = openstack_networking_floatingip_v2.public_ip.address
   port_id     = openstack_networking_port_v2.web_port.id
