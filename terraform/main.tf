@@ -19,8 +19,8 @@ provider "openstack" {
 # 1) 서브넷 조회
 data "openstack_networking_subnet_v2" "public_subnet" {
   # ID 기반 조회는 지원되지 않으므로, name 필터로 조회합니다.
-  name = var.public_subnet_id
-  #subnet_id = var.public_subnet_id
+  #name = var.public_subnet_id
+  subnet_id = var.public_subnet_id
 }
 
 # 2) 그 서브넷이 속한 네트워크 조회
