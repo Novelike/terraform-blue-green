@@ -10,18 +10,22 @@ jobs:
   deploy:
     name: Deploy & Switch
     runs-on: ubuntu-latest
+
+    # Terraform 인증 및 SSH/Discord Webhook 정보
     env:
-      # Terraform 인증 정보
-      TF_VAR_username:    ${{ secrets.TF_VAR_USERNAME }}
-      TF_VAR_password:    ${{ secrets.TF_VAR_PASSWORD }}
-      TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
-      TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
-      # SSH와 Discord Webhook
-      SSH_KEY:             ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      TF_VAR_username:       ${{ secrets.TF_VAR_USERNAME }}
+      TF_VAR_password:       ${{ secrets.TF_VAR_PASSWORD }}
+      TF_VAR_tenant_name:    ${{ secrets.TF_VAR_TENANT_NAME }}
+      TF_VAR_region:         ${{ secrets.TF_VAR_REGION }}
+      SSH_KEY:               ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL:   ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Setup Terraform
@@ -29,52 +33,65 @@ jobs:
         with:
           terraform_version: 1.5.7
 
-      - name: Terraform Init & Refresh
-        run: |
-          terraform -chdir=terraform init
-          terraform -chdir=terraform refresh
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Refresh (ignore errors)
+        working-directory: terraform
+        run: terraform refresh || true
 
       - name: Determine Active & Next Env
         id: determine
+        working-directory: terraform
         run: |
           set +e
-
-          # stderr 은 버리고 stdout만 RAW에 담기
-          RAW=$(terraform -chdir=terraform output -raw lb_vip 2>/dev/null)
+          # lb_vip 읽기 (stderr은 버리고)
+          LB_VIP=$(terraform output -raw lb_vip 2>/dev/null)
           RET=$?
-
-          # 실패하거나 빈 값일 땐 NEXT_ENV만 쓰고 종료
-          if [ $RET -ne 0 ] || [ -z "$RAW" ]; then
-            echo "::warning::Could not read lb_vip from state"
-            echo "NEXT_ENV=blue" >> $GITHUB_ENV
+          if [[ $RET -ne 0 ]] || [[ -z "$LB_VIP" ]]; then
+            echo "next_env=blue" >> $GITHUB_OUTPUT
+            echo "::warning::Could not read lb_vip; defaulting to blue"
             exit 0
           fi
+          echo "lb_vip=$LB_VIP" >> $GITHUB_OUTPUT
 
-          # 정상 IP만 GITHUB_ENV에 기록
-          echo "LB_VIP=$RAW" >> $GITHUB_ENV
-
-          # 헬스체크
-          curl -fs http://$RAW/hello
-          if [ $? -eq 0 ]; then
-            echo "NEXT_ENV=green" >> $GITHUB_ENV
+          # 헬스체크: 성공하면 green, 실패하면 blue
+          if curl -fs http://$LB_VIP/hello; then
+            echo "next_env=green" >> $GITHUB_OUTPUT
           else
-            echo "NEXT_ENV=blue"  >> $GITHUB_ENV
+            echo "next_env=blue" >> $GITHUB_OUTPUT
           fi
-
           set -e
 
       - name: Get Instance IPs
-        id: get-ips
+        id: getips
+        working-directory: terraform
         run: |
-          BLUE_IP=$(terraform -chdir=terraform output -raw blue_ip)
-          GREEN_IP=$(terraform -chdir=terraform output -raw green_ip)
-          echo "BLUE_IP=$BLUE_IP"   >> $GITHUB_ENV
-          echo "GREEN_IP=$GREEN_IP" >> $GITHUB_ENV
+          echo "blue_ip=$(terraform output -raw blue_ip)" >> $GITHUB_OUTPUT
+          echo "green_ip=$(terraform output -raw green_ip)" >> $GITHUB_OUTPUT
 
-      - name: Deploy to Next Env
+      - name: Deploy to Blue
+        if: steps.determine.outputs.next_env == 'blue'
         uses: appleboy/ssh-action@v0.1.6
         with:
-          host: ${{ env.NEXT_ENV == 'blue' && env.BLUE_IP || env.GREEN_IP }}
+          host: ${{ steps.getips.outputs.blue_ip }}
+          username: ubuntu
+          key: ${{ env.SSH_KEY }}
+          script: |
+            cd /opt/app
+            git pull
+            . venv/bin/activate
+            pip install -r requirements.txt
+            echo "$(date)" > /opt/deploy_timestamp.txt
+            pkill -f "uvicorn app.main"
+            nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+
+      - name: Deploy to Green
+        if: steps.determine.outputs.next_env == 'green'
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ steps.getips.outputs.green_ip }}
           username: ubuntu
           key: ${{ env.SSH_KEY }}
           script: |
@@ -87,28 +104,29 @@ jobs:
             nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
       - name: Health Check
+        working-directory: terraform
         run: |
-          for i in $(seq 1 5); do
-            if curl -fs http://${{ env.LB_VIP }}/hello; then exit 0; fi
+          for i in {1..5}; do
+            if curl -fs http://${{ steps.determine.outputs.lb_vip }}/hello; then
+              exit 0
+            fi
             sleep 5
           done
-          echo "Health check failed" && exit 1
+          echo "::error::Health check failed" && exit 1
 
       - name: Switch Traffic
         if: success()
-        run: terraform -chdir=terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
+        working-directory: terraform
+        run: terraform apply -auto-approve -var="active_env=${{ steps.determine.outputs.next_env }}"
 
-      - name: Notify Discord on Success
-        if: success()
+      - name: Notify Discord
         run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            CONTENT="✅ Deployment to **${{ steps.determine.outputs.next_env }}** succeeded!\nLB VIP: ${{ steps.determine.outputs.lb_vip }}"
+          else
+            CONTENT="🚨 Deployment to **${{ steps.determine.outputs.next_env }}** failed! Check logs."
+          fi
           curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"✅ Deployment to **${{ env.NEXT_ENV }}** succeeded!\nLB VIP: ${{ env.LB_VIP }}\"}" \
-               ${{ env.DISCORD_WEBHOOK_URL }}
-
-      - name: Notify Discord on Failure
-        if: failure()
-        run: |
-          curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"🚨 Deployment to **${{ env.NEXT_ENV }}** failed! Check workflow logs.\"}" \
+               -d "{\"content\":\"$CONTENT\"}" \
                ${{ env.DISCORD_WEBHOOK_URL }}
 
