@@ -39,16 +39,28 @@ jobs:
         id: determine
         run: |
           set +e
-          LB_VIP=$(terraform -chdir=terraform output -raw lb_vip)
-          echo "LB_VIP=$LB_VIP" >> $GITHUB_ENV
 
-          curl -fs http://$LB_VIP/hello
+          # 1) terraform output 시도 (stderr 포함)
+          RAW=$(terraform -chdir=terraform output -raw lb_vip 2>&1)
+          RET=$?
+          if [ $RET -ne 0 ] || [ -z "$RAW" ]; then
+            echo "::warning::Could not read lb_vip from state: $RAW"
+            echo "NEXT_ENV=blue" >> $GITHUB_ENV   # 기본값
+            exit 0
+          fi
+
+          # 2) 정상값만 GITHUB_ENV에 기록
+          echo "LB_VIP=$RAW" >> $GITHUB_ENV
+
+          # 3) 헬스체크
+          curl -fs http://$RAW/hello
           STATUS=$?
           if [ $STATUS -eq 0 ]; then
             echo "NEXT_ENV=green" >> $GITHUB_ENV
           else
             echo "NEXT_ENV=blue"  >> $GITHUB_ENV
           fi
+
           set -e
 
 
