@@ -90,7 +90,7 @@ async def hello():\\
 
 # 3) public 네트워크 조회 (이름이 "public"인 네트워크)
 data "openstack_networking_network_v2" "public" {
-  name = "sfacspace-default"
+  name = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b_7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
 }
 
 # 4) Floating IP 생성
