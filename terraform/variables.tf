@@ -30,7 +30,7 @@
   variable "create_instance" {
     description = "인스턴스 생성 여부"
     type        = bool
-    default     = false
+    default     = true
   }
 
   variable "image_name" {
@@ -95,16 +95,10 @@
     default     = "unique-suffix"
   }
 
-  variable "network_id" {
-    description = "이미 존재하는 VPC 네트워크 ID (sfacspace-default)"
+  variable "network_name" {
+    description = "내부 네트워크 이름 또는 ID"
     type        = string
-    default     = "7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
-  }
-
-  variable "subnet_id" {
-    description = "서브넷 id"
-    type        = string
-    default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b"
+    default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b_7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
   }
 
   variable "dev_name" {

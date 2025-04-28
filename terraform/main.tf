@@ -16,14 +16,26 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# 1) 보안 그룹 (SSH/HTTP)
-resource "openstack_networking_secgroup_v2" "web_sg" {
-  name        = "${var.dev_name}-sg"
-  description = "Allow SSH(22) and HTTP(80)"
+# 1) Ubuntu 이미지 조회
+data "openstack_images_image_v2" "ubuntu" {
+  name        = var.image_name
+  most_recent = true
 }
 
-resource "openstack_networking_secgroup_rule_v2" "ssh" {
-  security_group_id = openstack_networking_secgroup_v2.web_sg.id
+# 2) External/Public 네트워크 조회
+data "openstack_networking_network_v2" "floating_network" {
+  external = true
+}
+
+# 3) 보안 그룹 생성
+resource "openstack_networking_secgroup_v2" "web" {
+  name        = "${var.dev_name}-web-sg"
+  description = "Security group for web servers"
+}
+
+# 4) SSH/HTTP 보안 규칙
+resource "openstack_networking_secgroup_rule_v2" "web_ssh" {
+  security_group_id = openstack_networking_secgroup_v2.web.id
   direction         = "ingress"
   ethertype         = "IPv4"
   protocol          = "tcp"
@@ -31,9 +43,8 @@ resource "openstack_networking_secgroup_rule_v2" "ssh" {
   port_range_max    = 22
   remote_ip_prefix  = "0.0.0.0/0"
 }
-
-resource "openstack_networking_secgroup_rule_v2" "http" {
-  security_group_id = openstack_networking_secgroup_v2.web_sg.id
+resource "openstack_networking_secgroup_rule_v2" "web_http" {
+  security_group_id = openstack_networking_secgroup_v2.web.id
   direction         = "ingress"
   ethertype         = "IPv4"
   protocol          = "tcp"
@@ -42,68 +53,70 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# 2) 내부망 Port 생성 (직접 제공된 network_id & subnet_id 사용)
-resource "openstack_networking_port_v2" "web_port" {
-  name               = "${var.dev_name}-port"
-  network_id         = var.network_id
-  security_group_ids = [ openstack_networking_secgroup_v2.web_sg.id ]
-
-  fixed_ip {
-    subnet_id = var.subnet_id
-  }
-}
-
-# 3) VM 인스턴스 (volume-backed)
+# 5) 웹 서버 인스턴스 (count=1 or 0)
 resource "openstack_compute_instance_v2" "web" {
-  name              = "${var.dev_name}-web"
-  image_id          = var.image_id
-  flavor_name       = var.flavor_name
-  key_pair          = var.key_name
+  count        = var.create_instance ? 1 : 0
+  name         = "${var.dev_name}-web-server"
+  image_id     = var.image_id != "" ? var.image_id : data.openstack_images_image_v2.ubuntu.id
+  flavor_name  = var.flavor_name
+  key_pair     = var.key_name
   availability_zone = var.availability_zone
+  security_groups  = [openstack_networking_secgroup_v2.web.name]
 
   network {
-    port = openstack_networking_port_v2.web_port.id
+    name = var.network_name
   }
 
   block_device {
-    uuid                  = var.image_id
+    uuid                  = var.image_id != "" ? var.image_id : data.openstack_images_image_v2.ubuntu.id
     source_type           = "image"
     destination_type      = "volume"
     volume_size           = var.root_volume_size
     delete_on_termination = true
   }
 
-  user_data = <<-EOF
-    #cloud-config
-    runcmd:
-      - apt-get update && apt-get install -y git python3 python3-venv
-      - mkdir -p /opt/app && cd /opt/app
-      - git clone https://github.com/fastapi/full-stack-fastapi-template.git .
-      - python3 -m venv venv && . venv/bin/activate
-      - pip install -r requirements.txt
-      - echo "$(date)" > /opt/deploy_timestamp.txt
-      - sed -i '/include_router/docs_router/i\\
-@app.get("/hello")\\
-async def hello():\\
-    return {"deployed": open("/opt/deploy_timestamp.txt").read().strip()}' backend/app/main.py
-      - cd backend
-      - nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
-  EOF
+  # 6) 퍼블릭 IP 자동 할당
+  lifecycle {
+    ignore_changes = [network]
+  }
+  provisioner "local-exec" {
+    command = <<EOT
+      # 생성된 인스턴스에 플로팅 IP 붙이기 (CLI 필요)
+      openstack server add floating ip ${openstack_compute_instance_v2.web[0].id} $(openstack floating ip create --network $(terraform output -raw floating_network_id) -f value -c floating_ip_address)
+    EOT
+    when    = destroy == false
+    on_failure = continue
+  }
 }
 
-# 4) External/Public 네트워크 조회 (external = true)
-data "openstack_networking_network_v2" "floating_network" {
-  external = true
+# 7) 추가 데이터 볼륨
+resource "openstack_blockstorage_volume_v3" "data" {
+  count = var.create_data_volume ? 1 : 0
+  name        = "${var.dev_name}-data-volume"
+  size        = var.data_volume_size
 }
 
-# 5) Floating IP 생성
-resource "openstack_networking_floatingip_v2" "public_ip" {
-  pool = data.openstack_networking_network_v2.floating_network.id
+resource "openstack_compute_volume_attach_v2" "data_attach" {
+  count       = var.create_instance && var.create_data_volume ? 1 : 0
+  instance_id = openstack_compute_instance_v2.web[0].id
+  volume_id   = openstack_blockstorage_volume_v3.data[0].id
 }
 
-# 6) Floating IP → Port 연결
-resource "openstack_networking_floatingip_associate_v2" "assoc" {
-  floating_ip = openstack_networking_floatingip_v2.public_ip.address
-  port_id     = openstack_networking_port_v2.web_port.id
+# 8) Object Storage 컨테이너 (S3 버킷)
+resource "openstack_objectstorage_container_v1" "storage" {
+  count = var.create_s3_bucket ? 1 : 0
+  name  = "${var.dev_name}-storage-${var.s3_bucket_suffix}"
+}
+
+# 9) floating_network_id 출력 (내부 CLI 스크립트용)
+output "floating_network_id" {
+  description = "External 네트워크 ID (CLI 로 플로팅 IP 생성할 때)"
+  value       = data.openstack_networking_network_v2.floating_network.id
+}
+
+# 10) 웹 서버 퍼블릭 IP (추가 local-exec 이후)
+output "public_ip" {
+  description = "웹 서버에 할당된 플로팅 IP"
+  value       = openstack_networking_floatingip_v2.public_ip.address
 }
 
