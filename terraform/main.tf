@@ -16,7 +16,7 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# 1) 보안 그룹 + 룰
+# 1) 보안 그룹 및 룰
 resource "openstack_networking_secgroup_v2" "web_sg" {
   name        = "${var.dev_name}-sg"
   description = "Allow SSH and HTTP"
@@ -47,7 +47,7 @@ data "openstack_images_image_v2" "ubuntu" {
   name = "Ubuntu-20.04"
 }
 
-# 3) Blue/Green VM 인스턴스 (볼륨백 부팅)
+# 3) Blue/Green VM 생성 (볼륨백 부팅)
 locals { envs = ["blue", "green"] }
 
 resource "openstack_compute_instance_v2" "web" {
@@ -91,7 +91,7 @@ resource "openstack_networking_floatingip_associate_v2" "assoc" {
   for_each    = openstack_compute_instance_v2.web
   floating_ip = openstack_networking_floatingip_v2.fip[each.key].address
   port_id     = each.value.network[0].port
-} :contentReference[oaicite:0]{index=0}
+}
 
 # 6) Load Balancer 구성
 resource "openstack_lb_loadbalancer_v2" "lb" {
