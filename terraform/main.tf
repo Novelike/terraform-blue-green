@@ -94,8 +94,8 @@ async def hello():\\
 }
 
 data "openstack_networking_network_v2" "external" {
-  # 카카오클라우드에서 퍼블릭 IP 풀로 사용하는 네트워크 이름 (보통 "public")
-  name = "main"
+  # OpenStack 상에서 “External”(router_external) 네트워크만 조회
+  router_external = true
 }
 
 # ── 3) Floating IP 생성 ──
