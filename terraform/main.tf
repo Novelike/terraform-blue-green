@@ -44,7 +44,7 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
 
 # 2) Ubuntu 이미지 조회
 data "openstack_images_image_v2" "ubuntu" {
-  name = "Ubuntu-20.04"
+  id = "6f8f7e1c-b801-46c6-940c-603ffc05247a"
 }
 
 # 3) Blue/Green VM 생성 (볼륨백 부팅)
