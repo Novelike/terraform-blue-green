@@ -18,7 +18,7 @@ jobs:
       TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
       TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
       SSH_KEY:            ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL:${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
       - name: Checkout
