@@ -69,6 +69,12 @@
     default     = 20
   }
 
+  variable "availability_zone" {
+    description = "인스턴스 및 LoadBalancer 생성 시 사용할 AZ (예: kr-standard-a)"
+    type        = string
+    default     = "kr-central-2-a"
+  }
+
   # 추가 볼륨 관련 변수
   variable "create_data_volume" {
     description = "추가 데이터 볼륨 생성 여부"

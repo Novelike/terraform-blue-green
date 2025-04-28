@@ -1,3 +1,4 @@
+// main.tf
 terraform {
   required_providers {
     openstack = {
@@ -16,7 +17,7 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# ─ Security Group
+# 1) Security Group & Rules
 resource "openstack_networking_secgroup_v2" "web_sg" {
   name        = "${var.dev_name}-sg"
   description = "Allow SSH and HTTP"
@@ -42,31 +43,33 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# ─ Ubuntu 24.04 이미지 조회
+# 2) Ubuntu Image 조회
 data "openstack_images_image_v2" "ubuntu" {
-  most_recent = true
-  visibility = "public"
-  properties = {
-    os_distro = "ubuntu"
-    os_version = "24.04"
-  }
+  name = "Ubuntu-20.04"
 }
 
-# ─ Blue/Green VM 2대
+# 3) Blue/Green VM 2대
 locals { envs = ["blue", "green"] }
 
 resource "openstack_compute_instance_v2" "web" {
-  for_each    = toset(local.envs)
-  name        = "${var.dev_name}-${each.key}"
-  image_id    = var.image_id != "" ? var.image_id : data.openstack_images_image_v2.ubuntu.id
-  flavor_name = var.flavor_name
-  key_pair    = var.key_name
-  security_groups = [
-    openstack_networking_secgroup_v2.web_sg.name
-  ]
+  for_each          = toset(local.envs)
+  name              = "${var.dev_name}-${each.key}"
+  image_id          = var.image_id != "" ? var.image_id : data.openstack_images_image_v2.ubuntu.id
+  flavor_name       = var.flavor_name
+  key_pair          = var.key_name
+  availability_zone = var.availability_zone
+  security_groups   = [openstack_networking_secgroup_v2.web_sg.name]
 
   network {
     name = var.network_name
+  }
+
+  block_device {
+    uuid                  = var.image_id != "" ? var.image_id : data.openstack_images_image_v2.ubuntu.id
+    source_type           = "image"
+    destination_type      = "volume"
+    volume_size           = var.root_volume_size
+    delete_on_termination = true
   }
 
   user_data = templatefile("${path.module}/cloud-init.tpl", {
@@ -78,10 +81,23 @@ resource "openstack_compute_instance_v2" "web" {
   }
 }
 
-# ─ Load Balancer / Listener / Pool / Monitor / Members
+# 4) Floating IP 할당
+resource "openstack_networking_floatingip_v2" "fip" {
+  for_each = toset(local.envs)
+  pool     = var.floating_ip_pool
+}
+
+resource "openstack_compute_floatingip_associate_v2" "assoc" {
+  for_each    = openstack_compute_instance_v2.web
+  floating_ip = openstack_networking_floatingip_v2.fip[each.key].address
+  instance_id = each.value.id
+}
+
+# 5) LoadBalancer & Pool & HealthMonitor & Members
 resource "openstack_lb_loadbalancer_v2" "lb" {
-  name          = "${var.dev_name}-lb"
-  vip_subnet_id = var.subnet_id
+  name               = "${var.dev_name}-lb"
+  vip_subnet_id      = var.subnet_id
+  availability_zone  = var.availability_zone
 }
 
 resource "openstack_lb_listener_v2" "listener" {
