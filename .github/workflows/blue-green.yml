@@ -1,0 +1,97 @@
+name: Blue-Green Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy & Switch
+    runs-on: ubuntu-latest
+    env:
+      # Terraform 인증 정보
+      TF_VAR_username:    ${{ secrets.TF_VAR_USERNAME }}
+      TF_VAR_password:    ${{ secrets.TF_VAR_PASSWORD }}
+      TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
+      TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
+
+      # SSH_KEY, DISCORD_WEBHOOK_URL 은 이미 등록하신 시크릿
+      SSH_KEY:               ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL:   ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.7
+
+      - name: Terraform Init & Refresh
+        run: |
+          terraform init
+          terraform refresh
+
+      - name: Determine Active & Next Env
+        id: determine
+        run: |
+          VIP=$(terraform output -raw lb_vip)
+          echo "LB_VIP=$VIP" >> $GITHUB_ENV
+          # 헬스체크 통과하면 blue → green, 실패하면 green → blue
+          if curl -fs http://$VIP/hello; then
+            echo "NEXT_ENV=green"  >> $GITHUB_ENV
+          else
+            echo "NEXT_ENV=blue"   >> $GITHUB_ENV
+          fi
+
+      - name: Get Instance IPs
+        id: get-ips
+        run: |
+          BLUE_IP=$(terraform output -raw blue_ip)
+          GREEN_IP=$(terraform output -raw green_ip)
+          echo "BLUE_IP=$BLUE_IP"   >> $GITHUB_ENV
+          echo "GREEN_IP=$GREEN_IP" >> $GITHUB_ENV
+
+      - name: Deploy to Next Env
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ env.NEXT_ENV == 'blue' && env.BLUE_IP || env.GREEN_IP }}
+          username: ubuntu
+          key: ${{ env.SSH_KEY }}
+          script: |
+            cd /opt/app
+            git pull
+            . venv/bin/activate
+            pip install -r requirements.txt
+            echo "$(date)" > /opt/deploy_timestamp.txt
+            pkill -f "uvicorn app.main"
+            nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+
+      - name: Health Check
+        run: |
+          for i in $(seq 1 5); do
+            if curl -fs http://${{ env.LB_VIP }}/hello; then exit 0; fi
+            sleep 5
+          done
+          echo "Health check failed" && exit 1
+
+      - name: Switch Traffic
+        if: success()
+        run: terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
+
+      - name: Notify Discord on Success
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{\"content\":\"✅ Deployment to **${{ env.NEXT_ENV }}** succeeded!\\nLB VIP: ${{ env.LB_VIP }}\"}" \
+               ${{ env.DISCORD_WEBHOOK_URL }}
+
+      - name: Notify Discord on Failure
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{\"content\":\"🚨 Deployment to **${{ env.NEXT_ENV }}** failed! Check workflow logs.\"}" \
+               ${{ env.DISCORD_WEBHOOK_URL }}
+
