@@ -42,20 +42,18 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# 2) 네트워크 포트 생성
+# 2) 내부망 포트 생성 (VPC + Subnet + SG)
 resource "openstack_networking_port_v2" "web_port" {
-  name            = "${var.dev_name}-port"
-  network_id      = var.network_id    # VPC ID: 7c90b71b-e11a-48dc-83a0-e2bf7394bfb4
-  security_group_ids = [
-    openstack_networking_secgroup_v2.web_sg.id
-  ]
+  name               = "${var.dev_name}-port"
+  network_id         = var.network_id
+  security_group_ids = [openstack_networking_secgroup_v2.web_sg.id]
 
   fixed_ip {
-    subnet_id = var.subnet_id         # 서브넷 ID: 75ec8f1b-f756-45ec-b84d-6124b2bd2f2b
+    subnet_id = var.subnet_id
   }
 }
 
-# 3) VM 인스턴스 (volume-backed) — 네트워크 대신 port 사용
+# 3) VM 인스턴스 (볼륨-백부팅, 네트워크는 web_port)
 resource "openstack_compute_instance_v2" "web" {
   name              = "${var.dev_name}-web"
   image_id          = var.image_id
@@ -93,19 +91,20 @@ async def hello():\\
   EOF
 }
 
+# 4) 외부(public) 네트워크 조회 (external = true)
 data "openstack_networking_network_v2" "external" {
-  # OpenStack 상에서 “External”(router_external) 네트워크만 조회
-  router_external = true
+  external = true
 }
 
-# ── 3) Floating IP 생성 ──
+# 5) Floating IP 생성 → 자동으로 external 네트워크 풀을 찾음
 resource "openstack_networking_floatingip_v2" "public_ip" {
-  # 변수 대신 data 소스로 자동 조회된 ID 사용
   pool = data.openstack_networking_network_v2.external.id
 }
 
-# ── 4) Floating IP → Port 연결 ──
+# 6) Floating IP → Port 연결
 resource "openstack_networking_floatingip_associate_v2" "assoc" {
   floating_ip = openstack_networking_floatingip_v2.public_ip.address
   port_id     = openstack_networking_port_v2.web_port.id
 }
+
+
