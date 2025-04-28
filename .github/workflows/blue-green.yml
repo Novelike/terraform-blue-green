@@ -10,22 +10,22 @@ jobs:
   deploy:
     name: Deploy & Switch
     runs-on: ubuntu-latest
-
-    # Terraform 인증 및 SSH/Discord Webhook 정보
-    env:
-      TF_VAR_username:       ${{ secrets.TF_VAR_USERNAME }}
-      TF_VAR_password:       ${{ secrets.TF_VAR_PASSWORD }}
-      TF_VAR_tenant_name:    ${{ secrets.TF_VAR_TENANT_NAME }}
-      TF_VAR_region:         ${{ secrets.TF_VAR_REGION }}
-      SSH_KEY:               ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL:   ${{ secrets.DISCORD_WEBHOOK_URL }}
-
     defaults:
       run:
         shell: bash
 
+    env:
+      # Terraform 인증
+      TF_VAR_username:    ${{ secrets.TF_VAR_USERNAME }}
+      TF_VAR_password:    ${{ secrets.TF_VAR_PASSWORD }}
+      TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
+      TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
+      # SSH & Discord
+      SSH_KEY:            ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL:${{ secrets.DISCORD_WEBHOOK_URL }}
+
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Setup Terraform
@@ -33,49 +33,50 @@ jobs:
         with:
           terraform_version: 1.5.7
 
-      - name: Terraform Init
+      - name: Terraform Init & Refresh
         working-directory: terraform
-        run: terraform init
-
-      - name: Terraform Refresh (ignore errors)
-        working-directory: terraform
-        run: terraform refresh || true
+        run: |
+          terraform init
+          terraform refresh || true
 
       - name: Determine Active & Next Env
-        id: determine
         working-directory: terraform
         run: |
           set +e
-          # lb_vip 읽기 (stderr은 버리고)
+
+          # 1) lb_vip 읽기 (stderr은 버리고)
           LB_VIP=$(terraform output -raw lb_vip 2>/dev/null)
           RET=$?
           if [[ $RET -ne 0 ]] || [[ -z "$LB_VIP" ]]; then
-            echo "next_env=blue" >> $GITHUB_OUTPUT
             echo "::warning::Could not read lb_vip; defaulting to blue"
+            echo "NEXT_ENV=blue" >> $GITHUB_ENV
             exit 0
           fi
-          echo "lb_vip=$LB_VIP" >> $GITHUB_OUTPUT
 
-          # 헬스체크: 성공하면 green, 실패하면 blue
-          if curl -fs http://$LB_VIP/hello; then
-            echo "next_env=green" >> $GITHUB_OUTPUT
+          # 2) LB_VIP 환경변수에 기록
+          echo "LB_VIP=$LB_VIP"  >> $GITHUB_ENV
+
+          # 3) 헬스체크
+          curl -fs http://$LB_VIP/hello
+          if [[ $? -eq 0 ]]; then
+            echo "NEXT_ENV=green" >> $GITHUB_ENV
           else
-            echo "next_env=blue" >> $GITHUB_OUTPUT
+            echo "NEXT_ENV=blue"  >> $GITHUB_ENV
           fi
+
           set -e
 
       - name: Get Instance IPs
-        id: getips
         working-directory: terraform
         run: |
-          echo "blue_ip=$(terraform output -raw blue_ip)" >> $GITHUB_OUTPUT
-          echo "green_ip=$(terraform output -raw green_ip)" >> $GITHUB_OUTPUT
+          echo "BLUE_IP=$(terraform output -raw blue_ip)"   >> $GITHUB_ENV
+          echo "GREEN_IP=$(terraform output -raw green_ip)" >> $GITHUB_ENV
 
       - name: Deploy to Blue
-        if: steps.determine.outputs.next_env == 'blue'
+        if: env.NEXT_ENV == 'blue'
         uses: appleboy/ssh-action@v0.1.6
         with:
-          host: ${{ steps.getips.outputs.blue_ip }}
+          host: ${{ env.BLUE_IP }}
           username: ubuntu
           key: ${{ env.SSH_KEY }}
           script: |
@@ -88,10 +89,10 @@ jobs:
             nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
       - name: Deploy to Green
-        if: steps.determine.outputs.next_env == 'green'
+        if: env.NEXT_ENV == 'green'
         uses: appleboy/ssh-action@v0.1.6
         with:
-          host: ${{ steps.getips.outputs.green_ip }}
+          host: ${{ env.GREEN_IP }}
           username: ubuntu
           key: ${{ env.SSH_KEY }}
           script: |
@@ -104,10 +105,9 @@ jobs:
             nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
       - name: Health Check
-        working-directory: terraform
         run: |
           for i in {1..5}; do
-            if curl -fs http://${{ steps.determine.outputs.lb_vip }}/hello; then
+            if curl -fs http://${{ env.LB_VIP }}/hello; then
               exit 0
             fi
             sleep 5
@@ -117,16 +117,16 @@ jobs:
       - name: Switch Traffic
         if: success()
         working-directory: terraform
-        run: terraform apply -auto-approve -var="active_env=${{ steps.determine.outputs.next_env }}"
+        run: terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
 
       - name: Notify Discord
         run: |
-          if [ "${{ job.status }}" = "success" ]; then
-            CONTENT="✅ Deployment to **${{ steps.determine.outputs.next_env }}** succeeded!\nLB VIP: ${{ steps.determine.outputs.lb_vip }}"
+          if [[ "${{ job.status }}" == "success" ]]; then
+            MSG="✅ Deployed to **${{ env.NEXT_ENV }}** succeeded!\nLB VIP: ${{ env.LB_VIP }}"
           else
-            CONTENT="🚨 Deployment to **${{ steps.determine.outputs.next_env }}** failed! Check logs."
+            MSG="🚨 Deployed to **${{ env.NEXT_ENV }}** failed! Check logs."
           fi
           curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"$CONTENT\"}" \
+               -d "{\"content\":\"$MSG\"}" \
                ${{ env.DISCORD_WEBHOOK_URL }}
 
