@@ -2,6 +2,9 @@ name: Terraform Deploy
 
 on:
   push:
+    paths:
+      - 'terraform/**'       # terraform 디렉터리 안이 바뀔 때만
+      - '.github/workflows/terraform.yml'
     branches: [ main ]
 
 jobs:

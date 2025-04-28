@@ -61,7 +61,6 @@ resource "openstack_compute_instance_v2" "web" {
   flavor_name  = var.flavor_name
   key_pair     = var.key_name
   availability_zone = var.availability_zone
-  security_groups  = [openstack_networking_secgroup_v2.web.name]
 
   network {
     name = var.network_name

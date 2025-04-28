@@ -3,6 +3,10 @@ name: Terraform + Blue-Green Deploy
 
 on:
   push:
+    paths:
+      - 'app/**'             # FastAPI 앱 소스가 바뀔 때만
+      - 'backend/**'
+      - 'github/workflows/blue_green.yml'
     branches:
       - main
 
