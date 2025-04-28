@@ -1,0 +1,58 @@
+name: Terraform Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    env:
+      # Terraform 변수들은 TF_VAR_<name> 형태로 자동 매핑됩니다
+      TF_VAR_username: ${{ secrets.TF_VAR_USERNAME }}
+      TF_VAR_password: ${{ secrets.TF_VAR_PASSWORD }}
+      TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
+      TF_VAR_region: ${{ secrets.TF_VAR_REGION }}
+      # SSH 키 (appleboy/ssh-action 등에 쓰실 경우)
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      run: terraform init -input=false
+
+    - name: Terraform Plan
+      run: terraform plan -out=tfplan
+
+    - name: Terraform Apply
+      run: terraform apply -input=false -auto-approve tfplan
+
+    - name: Export Public IP
+      run: echo "PUBLIC_IP=$(terraform output -raw public_ip)" >> $GITHUB_ENV
+
+    - name: Notify Success to Discord
+      if: ${{ success() }}
+      run: |
+        curl -X POST -H 'Content-Type: application/json' \
+          -d "{\"content\":\":white_check_mark: Terraform Apply 성공!\n▶️ 접속 IP: ${{ env.PUBLIC_IP }}\"}" \
+          ${{ env.DISCORD_WEBHOOK_URL }}
+
+    - name: Notify Failure to Discord
+      if: ${{ failure() }}
+      run: |
+        curl -X POST -H 'Content-Type: application/json' \
+          -d "{\"content\":\":x: Terraform Apply 실패! 로그를 확인하세요.\"}" \
+          ${{ env.DISCORD_WEBHOOK_URL }}
+
