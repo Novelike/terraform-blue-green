@@ -98,7 +98,7 @@
   variable "subnet_id" {
     description = "서브넷 ID (VPC 내의 실제 네트워크)"
     type        = string
-    default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b"
+    default     = "97eca223-44eb-4a55-8082-aaa3686be094"
   }
 
   variable "dev_name" {
