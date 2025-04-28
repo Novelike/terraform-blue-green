@@ -111,4 +111,9 @@
     description = "개발자 이름 (리소스 이름 접두어로 사용)"
     type        = string
     default     = "kjh"
+  }
+
+  variable "external_network_id" {
+    description = "퍼블릭 IP를 생성할 외부 네트워크(플로팅 IP 풀) ID"
+    type        = string
   } 

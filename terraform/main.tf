@@ -16,7 +16,7 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# 1) 보안 그룹
+# 1) 보안 그룹 (SSH/HTTP)
 resource "openstack_networking_secgroup_v2" "web_sg" {
   name        = "${var.dev_name}-sg"
   description = "Allow SSH and HTTP"
@@ -50,13 +50,14 @@ resource "openstack_compute_instance_v2" "web" {
   key_pair          = var.key_name
   availability_zone = var.availability_zone
 
-  # 보안 그룹은 이름 리스트로 지정
-  security_groups = [
-    openstack_networking_secgroup_v2.web_sg.name
+  # ID 기준으로 SG 지정 (이름 중복 방지)
+  security_group_ids = [
+    openstack_networking_secgroup_v2.web_sg.id
   ]
 
   network {
-    name = var.network_name
+    name      = var.network_name
+    subnet_id = var.subnet_id
   }
 
   block_device {
@@ -70,13 +71,10 @@ resource "openstack_compute_instance_v2" "web" {
   user_data = <<-EOF
     #cloud-config
     runcmd:
-      - apt-get update
-      - apt-get install -y git python3 python3-venv
-      - mkdir -p /opt/app
-      - cd /opt/app
+      - apt-get update && apt-get install -y git python3 python3-venv
+      - mkdir -p /opt/app && cd /opt/app
       - git clone https://github.com/fastapi/full-stack-fastapi-template.git .
-      - python3 -m venv venv
-      - . venv/bin/activate
+      - python3 -m venv venv && . venv/bin/activate
       - pip install -r requirements.txt
       - echo "$(date)" > /opt/deploy_timestamp.txt
       - sed -i '/include_router/docs_router/i\\
@@ -88,17 +86,12 @@ async def hello():\\
   EOF
 }
 
-# 3) public 네트워크 조회 (이름이 "public"인 네트워크)
-data "openstack_networking_network_v2" "public" {
-  name = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b_7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
-}
-
-# 4) Floating IP 생성
+# 3) Public IP 생성
 resource "openstack_networking_floatingip_v2" "public_ip" {
-  pool = data.openstack_networking_network_v2.public.id
+  pool = var.external_network_id
 }
 
-# 5) Floating IP → VM 포트 연결
+# 4) 생성된 Public IP를 VM 포트에 연결
 resource "openstack_networking_floatingip_associate_v2" "assoc" {
   floating_ip = openstack_networking_floatingip_v2.public_ip.address
   port_id     = openstack_compute_instance_v2.web.network[0].port
