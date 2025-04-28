@@ -84,8 +84,15 @@ resource "openstack_compute_instance_v2" "web" {
       # 생성된 인스턴스에 플로팅 IP 붙이기 (CLI 필요)
       openstack server add floating ip ${openstack_compute_instance_v2.web[0].id} $(openstack floating ip create --network $(terraform output -raw floating_network_id) -f value -c floating_ip_address)
     EOT
-    when    = destroy == false
-    on_failure = continue
+    when    = "create"
+    on_failure = "continue"
+
+    command = <<EOF
+       # 생성된 인스턴스에 플로팅 IP 붙이기 (CLI 필요)
+       openstack server add floating ip ${openstack_compute_instance_v2.web[0].id} \
+         $(openstack floating ip create --network $(terraform output -raw floating_network_id) \
+         -f value -c floating_ip_address)
+     EOF
   }
 }
 
@@ -114,9 +121,4 @@ output "floating_network_id" {
   value       = data.openstack_networking_network_v2.floating_network.id
 }
 
-# 10) 웹 서버 퍼블릭 IP (추가 local-exec 이후)
-output "public_ip" {
-  description = "웹 서버에 할당된 플로팅 IP"
-  value       = openstack_networking_floatingip_v2.public_ip.address
-}
 
