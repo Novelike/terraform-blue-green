@@ -32,11 +32,6 @@
     default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b_7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
   }
 
-  variable "floating_network_id" {
-    description = "퍼블릭 IP를 할당할 외부 네트워크 ID"
-    type        = string
-  }
-
   # 인스턴스 관련 변수
   variable "create_instance" {
     description = "인스턴스 생성 여부"
