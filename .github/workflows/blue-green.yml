@@ -1,13 +1,13 @@
-# .github/workflows/blue_green.yml
+# .github/workflows/blue-green.yml
 name: Blue-Green Deploy
 
 on:
   push:
     paths:
-      - 'backend/**'                          # 앱 소스
+      - 'backend/**'
       - 'frontend/**'
-      - '.github/workflows/blue_green.yml'    # 워크플로우 변경 시
-      - 'terraform/**'                        # 인프라 코드 변경 시에도 실행
+      - '.github/workflows/blue-green.yml'
+      - 'terraform/**'
 
 jobs:
   ensure-infra:
@@ -22,19 +22,12 @@ jobs:
       TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
       TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+      - uses: actions/checkout@v3
+      - uses: hashicorp/setup-terraform@v2
         with:
           terraform_wrapper: false
-
-      - name: Terraform Init
-        run: terraform init -input=false
-
-      - name: Terraform Apply (create or reuse infra)
-        run: terraform apply -auto-approve -input=false
+      - run: terraform init -input=false
+      - run: terraform apply -auto-approve -input=false
 
   deploy:
     name: Deploy App (Blue-Green)
@@ -47,27 +40,35 @@ jobs:
       SSH_KEY:             ${{ secrets.SSH_KEY }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Determine Active & Next Env
-        id: env
+        id: determine-env
         run: |
           set +e
           VIP=$(terraform -chdir=terraform output -raw lb_vip 2>/dev/null)
+          echo "LB_VIP=$VIP" >> $GITHUB_ENV
           if curl -fs http://$VIP/hello; then
-            echo "next=green" >> $GITHUB_ENV
+            echo "NEXT_ENV=green" >> $GITHUB_ENV
           else
-            echo "next=blue"  >> $GITHUB_ENV
+            echo "NEXT_ENV=blue"  >> $GITHUB_ENV
           fi
           set -e
 
-      - name: Deploy to ${{ env.next }}
+      - name: Set target HOST
+        run: |
+          if [ "${{ env.NEXT_ENV }}" = "blue" ]; then
+            echo "HOST=$(terraform -chdir=terraform output -raw blue_ip)" >> $GITHUB_ENV
+          else
+            echo "HOST=$(terraform -chdir=terraform output -raw green_ip)" >> $GITHUB_ENV
+          fi
+
+      - name: Deploy to ${{ env.NEXT_ENV }}
         uses: appleboy/ssh-action@v0.1.6
         with:
-          host:      ${{ env.next == 'blue' && terraform -chdir=terraform output -raw blue_ip || terraform -chdir=terraform output -raw green_ip }}
-          username:  ubuntu
-          key:       ${{ secrets.SSH_KEY }}
+          host:       ${{ env.HOST }}
+          username:   ubuntu
+          key:        ${{ env.SSH_KEY }}
           script: |
             cd /opt/app
             git pull
@@ -77,22 +78,21 @@ jobs:
             pkill -f "uvicorn app.main"
             nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
-      - name: Switch LB to ${{ env.next }}
-        run: |
-          terraform -chdir=terraform apply -auto-approve \
-            -var="active_env=${{ env.next }}"
+      - name: Switch LB to ${{ env.NEXT_ENV }}
+        run: terraform -chdir=terraform apply -auto-approve \
+              -var="active_env=${{ env.NEXT_ENV }}"
 
       - name: Notify Success to Discord
-        if: success()
+        if: ${{ success() }}
         run: |
           curl -X POST -H 'Content-Type: application/json' \
-            -d "{\"content\":\"✅ Deploy to `${{ env.next }}` succeeded!\"}" \
+            -d "{\"content\":\"✅ Deploy to `${{ env.NEXT_ENV }}` succeeded!\"}" \
             ${{ env.DISCORD_WEBHOOK_URL }}
 
       - name: Notify Failure to Discord
-        if: failure()
+        if: ${{ failure() }}
         run: |
           curl -X POST -H 'Content-Type: application/json' \
-            -d "{\"content\":\"❌ Deploy to `${{ env.next }}` failed! Check logs.\"}" \
+            -d "{\"content\":\"❌ Deploy to `${{ env.NEXT_ENV }}` failed! Check logs.\"}" \
             ${{ env.DISCORD_WEBHOOK_URL }}
 
