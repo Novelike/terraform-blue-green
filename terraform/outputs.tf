@@ -1,11 +1,11 @@
 output "blue_ip" {
-  description = "Blue 서버 IP"
-  value       = openstack_compute_instance_v2.web["blue"].access_ip_v4
+  description = "Blue 서버 플로팅 IP"
+  value       = openstack_networking_floatingip_v2.fip["blue"].address
 }
 
 output "green_ip" {
-  description = "Green 서버 IP"
-  value       = openstack_compute_instance_v2.web["green"].access_ip_v4
+  description = "Green 서버 플로팅 IP"
+  value       = openstack_networking_floatingip_v2.fip["green"].address
 }
 
 output "lb_vip" {
