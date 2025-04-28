@@ -100,7 +100,7 @@ resource "openstack_lb_loadbalancer_v2" "lb" {
 
   # LB가 오래 걸릴 경우 최대 대기 시간 설정 (예: 15분)
   timeouts {
-    create = "15m"
+    create = "5m"
   }
 }
 
