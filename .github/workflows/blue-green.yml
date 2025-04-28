@@ -30,6 +30,7 @@ jobs:
           terraform_version: 1.5.7
 
       - name: Terraform Init & Refresh
+        working-directory: terraform
         run: |
           terraform init
           terraform refresh
@@ -79,6 +80,7 @@ jobs:
 
       - name: Switch Traffic
         if: success()
+        working-directory: terraform
         run: terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
 
       - name: Notify Discord on Success

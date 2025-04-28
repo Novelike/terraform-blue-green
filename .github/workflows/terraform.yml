@@ -32,6 +32,7 @@ jobs:
           terraform_version: 1.5.7
 
       - name: Terraform Init
+        working-directory: terraform
         run: terraform init
 
       - name: Terraform Format Check
@@ -42,9 +43,11 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        working-directory: terraform
         run: terraform plan
 
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
+        working-directory: terraform
         run: terraform apply -auto-approve
 
