@@ -16,17 +16,24 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# 1) 서브넷 이름으로 내부망 조회
-data "openstack_networking_subnet_v2" "public" {
+# 1) 서브넷 조회
+data "openstack_networking_subnet_v2" "public_subnet" {
+  # ID 기반 조회는 지원되지 않으므로, name 필터로 조회합니다.
   name = var.public_subnet_id
+  #subnet_id = var.public_subnet_id
 }
 
-# 2) external = true 로 External/Public 네트워크 조회
+# 2) 그 서브넷이 속한 네트워크 조회
+data "openstack_networking_network_v2" "public_network" {
+  network_id = data.openstack_networking_subnet_v2.public_subnet.network_id
+}
+
+# 3) External/Public 네트워크 조회 (external=true)
 data "openstack_networking_network_v2" "floating_network" {
   external = true
 }
 
-# 3) 보안 그룹 생성 (SSH/HTTP)
+# 4) 보안 그룹 생성 (SSH/HTTP)
 resource "openstack_networking_secgroup_v2" "web_sg" {
   name        = "${var.dev_name}-sg"
   description = "Allow SSH(22) and HTTP(80)"
@@ -52,20 +59,18 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# 4) 내부망 Port 생성
+# 5) 내부망 Port 생성
 resource "openstack_networking_port_v2" "web_port" {
-  name       = "${var.dev_name}-port"
-  network_id = data.openstack_networking_subnet_v2.public.network_id
-  security_group_ids = [
-    openstack_networking_secgroup_v2.web_sg.id
-  ]
+  name               = "${var.dev_name}-port"
+  network_id         = data.openstack_networking_network_v2.public_network.id
+  security_group_ids = [openstack_networking_secgroup_v2.web_sg.id]
 
   fixed_ip {
-    subnet_id = data.openstack_networking_subnet_v2.public.id
+    subnet_id = data.openstack_networking_subnet_v2.public_subnet.id
   }
 }
 
-# 5) VM 인스턴스 (volume-backed)
+# 6) VM 인스턴스 (volume-backed)
 resource "openstack_compute_instance_v2" "web" {
   name              = "${var.dev_name}-web"
   image_id          = var.image_id
@@ -103,12 +108,12 @@ async def hello():\\
   EOF
 }
 
-# 6) Floating IP 생성 (external = true 네트워크 풀 사용)
+# 7) Floating IP 생성 (external=true 네트워크 풀)
 resource "openstack_networking_floatingip_v2" "public_ip" {
   pool = data.openstack_networking_network_v2.floating_network.id
 }
 
-# 7) Floating IP → Port 연결
+# 8) Floating IP → Port 연결
 resource "openstack_networking_floatingip_associate_v2" "assoc" {
   floating_ip = openstack_networking_floatingip_v2.public_ip.address
   port_id     = openstack_networking_port_v2.web_port.id
