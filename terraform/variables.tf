@@ -26,12 +26,6 @@
     default     = "kc-sfacspace"
   }
 
-  variable "network_id" {
-    description = "내부 VPC 네트워크 ID (sfacspace-default)"
-    type        = string
-    default     = "7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
-  }
-
   # 인스턴스 관련 변수
   variable "create_instance" {
     description = "인스턴스 생성 여부"
