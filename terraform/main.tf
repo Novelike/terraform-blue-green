@@ -110,3 +110,5 @@ resource "openstack_objectstorage_container_v1" "storage" {
   name  = "${var.dev_name}-storage-${var.s3_bucket_suffix}"
 }
 
+
+

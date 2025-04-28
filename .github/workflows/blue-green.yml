@@ -96,3 +96,5 @@ jobs:
             -d "{\"content\":\"❌ Deploy to `${{ env.next }}` failed! Check logs.\"}" \
             ${{ env.DISCORD_WEBHOOK_URL }}
 
+
+
