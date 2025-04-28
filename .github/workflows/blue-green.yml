@@ -1,31 +1,27 @@
-# .github/workflows/blue-green.yml
-name: Blue-Green Deploy
+# .github/workflows/blue-green-combined.yml
+name: Terraform + Blue-Green Deploy
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
-  deploy:
-    name: Deploy & Switch
+  provision_and_deploy:
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
 
     env:
-      # Terraform authentication
-      TF_VAR_username:     ${{ secrets.TF_VAR_USERNAME }}
-      TF_VAR_password:     ${{ secrets.TF_VAR_PASSWORD }}
-      TF_VAR_tenant_name:  ${{ secrets.TF_VAR_TENANT_NAME }}
-      TF_VAR_region:       ${{ secrets.TF_VAR_REGION }}
-      # SSH & Discord
-      SSH_KEY:             ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      TF_VAR_username:    ${{ secrets.TF_VAR_USERNAME }}
+      TF_VAR_password:    ${{ secrets.TF_VAR_PASSWORD }}
+      TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
+      TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
+      SSH_KEY:            ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL:${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v3
 
       - name: Setup Terraform
@@ -33,14 +29,24 @@ jobs:
         with:
           terraform_version: 1.5.7
 
+      # ──────────────────────────────
+      # 1) Infra: Init → Plan → Apply
+      # ──────────────────────────────
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
 
-      - name: Terraform Refresh (ignore errors)
+      - name: Terraform Plan
         working-directory: terraform
-        run: terraform refresh || true
+        run: terraform plan
 
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve
+
+      # ──────────────────────────────
+      # 2) Determine Active & Next Env
+      # ──────────────────────────────
       - name: Determine Active & Next Env
         id: determine
         working-directory: terraform
@@ -51,30 +57,27 @@ jobs:
           if [[ -z "$VIP" ]]; then
             echo "::warning::Could not parse lb_vip; defaulting to blue"
             echo "NEXT_ENV=blue" >> $GITHUB_ENV
-            exit 0
-          fi
-          echo "LB_VIP=$VIP" >> $GITHUB_ENV
-
-          if curl -fs http://$VIP/hello; then
-            echo "NEXT_ENV=green" >> $GITHUB_ENV
           else
-            echo "NEXT_ENV=blue"  >> $GITHUB_ENV
+            echo "LB_VIP=$VIP" >> $GITHUB_ENV
+            if curl -fs http://$VIP/hello; then
+              echo "NEXT_ENV=green" >> $GITHUB_ENV
+            else
+              echo "NEXT_ENV=blue"  >> $GITHUB_ENV
+            fi
           fi
           set -e
 
       - name: Get Instance IPs
         working-directory: terraform
         run: |
-          set +e
-          RAW_BLUE=$(terraform output -raw blue_ip 2>/dev/null)
-          RAW_GREEN=$(terraform output -raw green_ip 2>/dev/null)
-          BLUE_IP=$(echo "$RAW_BLUE"  | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}')
-          GREEN_IP=$(echo "$RAW_GREEN" | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}')
-          # write valid IPs or empty strings
-          echo "BLUE_IP=${BLUE_IP:-}"   >> $GITHUB_ENV
-          echo "GREEN_IP=${GREEN_IP:-}" >> $GITHUB_ENV
-          set -e
+          BLUE=$(terraform output -raw blue_ip)
+          GREEN=$(terraform output -raw green_ip)
+          echo "BLUE_IP=$BLUE"   >> $GITHUB_ENV
+          echo "GREEN_IP=$GREEN" >> $GITHUB_ENV
 
+      # ──────────────────────────────
+      # 3) Deploy to Next Env
+      # ──────────────────────────────
       - name: Deploy to Blue
         if: env.NEXT_ENV == 'blue'
         uses: appleboy/ssh-action@v0.1.6
@@ -83,13 +86,9 @@ jobs:
           username: ubuntu
           key: ${{ env.SSH_KEY }}
           script: |
-            cd /opt/app
-            git pull
-            . venv/bin/activate
-            pip install -r requirements.txt
-            echo "$(date)" > /opt/deploy_timestamp.txt
-            pkill -f "uvicorn app.main"
-            nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+            cd /opt/app; git pull; . venv/bin/activate; pip install -r requirements.txt
+            echo "$(date)" >/opt/deploy_timestamp.txt
+            pkill -f uvicorn; nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
       - name: Deploy to Green
         if: env.NEXT_ENV == 'green'
@@ -99,35 +98,35 @@ jobs:
           username: ubuntu
           key: ${{ env.SSH_KEY }}
           script: |
-            cd /opt/app
-            git pull
-            . venv/bin/activate
-            pip install -r requirements.txt
-            echo "$(date)" > /opt/deploy_timestamp.txt
-            pkill -f "uvicorn app.main"
-            nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+            cd /opt/app; git pull; . venv/bin/activate; pip install -r requirements.txt
+            echo "$(date)" >/opt/deploy_timestamp.txt
+            pkill -f uvicorn; nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
+      # ──────────────────────────────
+      # 4) Health Check & Switch Traffic
+      # ──────────────────────────────
       - name: Health Check
         run: |
           for i in {1..5}; do
-            if curl -fs http://${{ env.LB_VIP }}/hello; then
-              exit 0
-            fi
+            if curl -fs http://${{ env.LB_VIP }}/hello; then exit 0; fi
             sleep 5
           done
-          echo "::error::Health check failed" && exit 1
+          exit 1
 
       - name: Switch Traffic
         if: success()
         working-directory: terraform
         run: terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
 
+      # ──────────────────────────────
+      # 5) Notify Discord
+      # ──────────────────────────────
       - name: Notify Discord
         run: |
           if [[ "${{ job.status }}" == "success" ]]; then
-            MSG="✅ Deployment to **${{ env.NEXT_ENV }}** succeeded!\nLB VIP: ${{ env.LB_VIP }}"
+            MSG="✅ Deployed to **${{ env.NEXT_ENV }}** ✓\nLB VIP: ${{ env.LB_VIP }}"
           else
-            MSG="🚨 Deployment to **${{ env.NEXT_ENV }}** failed! Check logs."
+            MSG="🚨 Deploy to **${{ env.NEXT_ENV }}** failed!"
           fi
           curl -H "Content-Type: application/json" \
                -d "{\"content\":\"$MSG\"}" \
