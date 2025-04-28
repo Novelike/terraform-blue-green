@@ -95,13 +95,7 @@
     default     = "unique-suffix"
   }
 
-  variable "network_name" {
-    description = "내부 VPC 네트워크 이름"
-    type        = string
-    default     = "sfacspace-default"
-  }
-
-  variable "subnet_name" {
+  variable "public_subnet_id" {
     description = "서브넷 이름"
     type        = string
     default     = "main"
