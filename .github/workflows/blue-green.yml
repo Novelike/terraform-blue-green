@@ -1,76 +1,73 @@
-# .github/workflows/blue-green.yml
-name: Terraform + Blue-Green Deploy
+# .github/workflows/blue_green.yml
+name: Blue-Green Deploy
 
 on:
   push:
     paths:
-      - 'app/**'             # FastAPI 앱 소스가 바뀔 때만
-      - 'backend/**'
-      - 'github/workflows/blue_green.yml'
-    branches:
-      - main
+      - 'backend/**'                          # 앱 소스
+      - 'frontend/**'
+      - '.github/workflows/blue_green.yml'    # 워크플로우 변경 시
+      - 'terraform/**'                        # 인프라 코드 변경 시에도 실행
 
 jobs:
-  deploy:
+  ensure-infra:
+    name: Ensure Infra (Terraform Apply)
     runs-on: ubuntu-latest
     defaults:
       run:
-        shell: bash
-
+        working-directory: terraform
     env:
-      TF_VAR_username:       ${{ secrets.TF_VAR_USERNAME }}
-      TF_VAR_password:       ${{ secrets.TF_VAR_PASSWORD }}
-      TF_VAR_tenant_name:    ${{ secrets.TF_VAR_TENANT_NAME }}
-      TF_VAR_region:         ${{ secrets.TF_VAR_REGION }}
-      SSH_KEY:               ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL:   ${{ secrets.DISCORD_WEBHOOK_URL }}
-
+      TF_VAR_username:    ${{ secrets.TF_VAR_USERNAME }}
+      TF_VAR_password:    ${{ secrets.TF_VAR_PASSWORD }}
+      TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
+      TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v3
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: 1.5.7
+          terraform_wrapper: false
 
       - name: Terraform Init
-        working-directory: terraform
-        run: terraform init
+        run: terraform init -input=false
 
-      - name: Terraform Plan
-        working-directory: terraform
-        run: terraform plan
+      - name: Terraform Apply (create or reuse infra)
+        run: terraform apply -auto-approve -input=false
 
-      - name: Terraform Apply
-        working-directory: terraform
-        run: terraform apply -auto-approve
+  deploy:
+    name: Deploy App (Blue-Green)
+    needs: ensure-infra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      SSH_KEY:             ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: Extract Outputs
-        working-directory: terraform
-        run: |
-          echo "LB_VIP=$(terraform output -raw lb_vip)"    >> $GITHUB_ENV
-          echo "BLUE_IP=$(terraform output -raw blue_ip)"  >> $GITHUB_ENV
-          echo "GREEN_IP=$(terraform output -raw green_ip)">> $GITHUB_ENV
-
-      - name: Determine Next Env
-        id: determine
+      - name: Determine Active & Next Env
+        id: env
         run: |
           set +e
-          curl -fs http://${{ env.LB_VIP }}/hello
-          if [ $? -eq 0 ]; then
-            echo "NEXT_ENV=green" >> $GITHUB_ENV
+          VIP=$(terraform -chdir=terraform output -raw lb_vip 2>/dev/null)
+          if curl -fs http://$VIP/hello; then
+            echo "next=green" >> $GITHUB_ENV
           else
-            echo "NEXT_ENV=blue"  >> $GITHUB_ENV
+            echo "next=blue"  >> $GITHUB_ENV
           fi
           set -e
 
-      - name: Deploy to Next Env
+      - name: Deploy to ${{ env.next }}
         uses: appleboy/ssh-action@v0.1.6
         with:
-          host: ${{ env.NEXT_ENV == 'blue' && env.BLUE_IP || env.GREEN_IP }}
-          username: ubuntu
-          key: ${{ env.SSH_KEY }}
+          host:      ${{ env.next == 'blue' && terraform -chdir=terraform output -raw blue_ip || terraform -chdir=terraform output -raw green_ip }}
+          username:  ubuntu
+          key:       ${{ secrets.SSH_KEY }}
           script: |
             cd /opt/app
             git pull
@@ -80,29 +77,22 @@ jobs:
             pkill -f "uvicorn app.main"
             nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
-      - name: Health Check
+      - name: Switch LB to ${{ env.next }}
         run: |
-          for i in {1..5}; do
-            if curl -fs http://${{ env.LB_VIP }}/hello; then
-              exit 0
-            fi
-            sleep 5
-          done
-          exit 1
+          terraform -chdir=terraform apply -auto-approve \
+            -var="active_env=${{ env.next }}"
 
-      - name: Switch Traffic
+      - name: Notify Success to Discord
         if: success()
-        working-directory: terraform
-        run: terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
-
-      - name: Notify Discord
         run: |
-          if [ "${{ job.status }}" = "success" ]; then
-            CONTENT="✅ Deployed to **${{ env.NEXT_ENV }}** succeeded! LB VIP: ${{ env.LB_VIP }}"
-          else
-            CONTENT="🚨 Deployment to **${{ env.NEXT_ENV }}** failed! Check logs."
-          fi
-          curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"$CONTENT\"}" \
-               ${{ env.DISCORD_WEBHOOK_URL }}
+          curl -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"✅ Deploy to `${{ env.next }}` succeeded!\"}" \
+            ${{ env.DISCORD_WEBHOOK_URL }}
+
+      - name: Notify Failure to Discord
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-Type: application/json' \
+            -d "{\"content\":\"❌ Deploy to `${{ env.next }}` failed! Check logs.\"}" \
+            ${{ env.DISCORD_WEBHOOK_URL }}
 
