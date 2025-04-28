@@ -1,3 +1,4 @@
+# .github/workflows/blue-green.yml
 name: Blue-Green Deploy
 
 on:
@@ -15,10 +16,9 @@ jobs:
       TF_VAR_password:    ${{ secrets.TF_VAR_PASSWORD }}
       TF_VAR_tenant_name: ${{ secrets.TF_VAR_TENANT_NAME }}
       TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
-
-      # SSH_KEY, DISCORD_WEBHOOK_URL 은 이미 등록하신 시크릿
-      SSH_KEY:               ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL:   ${{ secrets.DISCORD_WEBHOOK_URL }}
+      # SSH와 Discord Webhook
+      SSH_KEY:             ${{ secrets.SSH_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
       - name: Checkout code
@@ -30,32 +30,32 @@ jobs:
           terraform_version: 1.5.7
 
       - name: Terraform Init & Refresh
-        working-directory: terraform
         run: |
-          terraform init
-          terraform refresh
+          terraform -chdir=terraform init
+          terraform -chdir=terraform refresh
 
       - name: Determine Active & Next Env
         id: determine
         run: |
           set +e
 
-          # 1) terraform output 시도 (stderr 포함)
-          RAW=$(terraform -chdir=terraform output -raw lb_vip 2>&1)
+          # stderr 은 버리고 stdout만 RAW에 담기
+          RAW=$(terraform -chdir=terraform output -raw lb_vip 2>/dev/null)
           RET=$?
+
+          # 실패하거나 빈 값일 땐 NEXT_ENV만 쓰고 종료
           if [ $RET -ne 0 ] || [ -z "$RAW" ]; then
-            echo "::warning::Could not read lb_vip from state: $RAW"
-            echo "NEXT_ENV=blue" >> $GITHUB_ENV   # 기본값
+            echo "::warning::Could not read lb_vip from state"
+            echo "NEXT_ENV=blue" >> $GITHUB_ENV
             exit 0
           fi
 
-          # 2) 정상값만 GITHUB_ENV에 기록
+          # 정상 IP만 GITHUB_ENV에 기록
           echo "LB_VIP=$RAW" >> $GITHUB_ENV
 
-          # 3) 헬스체크
+          # 헬스체크
           curl -fs http://$RAW/hello
-          STATUS=$?
-          if [ $STATUS -eq 0 ]; then
+          if [ $? -eq 0 ]; then
             echo "NEXT_ENV=green" >> $GITHUB_ENV
           else
             echo "NEXT_ENV=blue"  >> $GITHUB_ENV
@@ -63,12 +63,11 @@ jobs:
 
           set -e
 
-
       - name: Get Instance IPs
         id: get-ips
         run: |
-          BLUE_IP=$(terraform output -raw blue_ip)
-          GREEN_IP=$(terraform output -raw green_ip)
+          BLUE_IP=$(terraform -chdir=terraform output -raw blue_ip)
+          GREEN_IP=$(terraform -chdir=terraform output -raw green_ip)
           echo "BLUE_IP=$BLUE_IP"   >> $GITHUB_ENV
           echo "GREEN_IP=$GREEN_IP" >> $GITHUB_ENV
 
@@ -97,14 +96,13 @@ jobs:
 
       - name: Switch Traffic
         if: success()
-        working-directory: terraform
-        run: terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
+        run: terraform -chdir=terraform apply -auto-approve -var="active_env=${{ env.NEXT_ENV }}"
 
       - name: Notify Discord on Success
         if: success()
         run: |
           curl -H "Content-Type: application/json" \
-               -d "{\"content\":\"✅ Deployment to **${{ env.NEXT_ENV }}** succeeded!\\nLB VIP: ${{ env.LB_VIP }}\"}" \
+               -d "{\"content\":\"✅ Deployment to **${{ env.NEXT_ENV }}** succeeded!\nLB VIP: ${{ env.LB_VIP }}\"}" \
                ${{ env.DISCORD_WEBHOOK_URL }}
 
       - name: Notify Discord on Failure
