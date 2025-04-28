@@ -22,7 +22,7 @@ jobs:
       TF_VAR_region:      ${{ secrets.TF_VAR_REGION }}
       # SSH & Discord
       SSH_KEY:            ${{ secrets.SSH_KEY }}
-      DISCORD_WEBHOOK_URL:${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
       - name: Checkout code
