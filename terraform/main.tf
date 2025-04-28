@@ -80,10 +80,6 @@ resource "openstack_compute_instance_v2" "web" {
     ignore_changes = [network]
   }
   provisioner "local-exec" {
-    command = <<EOT
-      # 생성된 인스턴스에 플로팅 IP 붙이기 (CLI 필요)
-      openstack server add floating ip ${openstack_compute_instance_v2.web[0].id} $(openstack floating ip create --network $(terraform output -raw floating_network_id) -f value -c floating_ip_address)
-    EOT
     when    = "create"
     on_failure = "continue"
 
