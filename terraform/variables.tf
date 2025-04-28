@@ -27,7 +27,7 @@
   }
 
   variable "network_name" {
-    description = "사용할 네트워크 이름"
+    description = "VM이 붙을 내부 네트워크 이름/ID"
     type        = string
     default     = "75ec8f1b-f756-45ec-b84d-6124b2bd2f2b_7c90b71b-e11a-48dc-83a0-e2bf7394bfb4"
   }

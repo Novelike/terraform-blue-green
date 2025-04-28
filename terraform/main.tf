@@ -16,11 +16,12 @@ provider "openstack" {
   domain_name = "kc-kdt-sfacspace2025"
 }
 
-# 1) Security Group (SSH 22, HTTP 80)
+# 1) 보안 그룹
 resource "openstack_networking_secgroup_v2" "web_sg" {
   name        = "${var.dev_name}-sg"
   description = "Allow SSH and HTTP"
 }
+
 resource "openstack_networking_secgroup_rule_v2" "ssh" {
   security_group_id = openstack_networking_secgroup_v2.web_sg.id
   direction         = "ingress"
@@ -30,6 +31,7 @@ resource "openstack_networking_secgroup_rule_v2" "ssh" {
   port_range_max    = 22
   remote_ip_prefix  = "0.0.0.0/0"
 }
+
 resource "openstack_networking_secgroup_rule_v2" "http" {
   security_group_id = openstack_networking_secgroup_v2.web_sg.id
   direction         = "ingress"
@@ -40,10 +42,7 @@ resource "openstack_networking_secgroup_rule_v2" "http" {
   remote_ip_prefix  = "0.0.0.0/0"
 }
 
-# 2) Ubuntu 24.04 이미지
-#   (이미 ID를 알고 있으므로 data 소스 없이 바로 사용)
-
-# 3) VM 인스턴스 (볼륨백)
+# 2) VM 인스턴스 (volume-backed)
 resource "openstack_compute_instance_v2" "web" {
   name              = "${var.dev_name}-web"
   image_id          = var.image_id
@@ -51,13 +50,13 @@ resource "openstack_compute_instance_v2" "web" {
   key_pair          = var.key_name
   availability_zone = var.availability_zone
 
-  security_group_ids = [
-    openstack_networking_secgroup_v2.web_sg.id
+  # 보안 그룹은 이름 리스트로 지정
+  security_groups = [
+    openstack_networking_secgroup_v2.web_sg.name
   ]
 
   network {
-    name       = var.network_name
-    subnet_id  = var.subnet_id
+    name = var.network_name
   }
 
   block_device {
@@ -89,17 +88,17 @@ async def hello():\\
   EOF
 }
 
-# 4) 외부(public) 네트워크 조회 (이름이 "public"인 네트워크)
+# 3) public 네트워크 조회 (이름이 "public"인 네트워크)
 data "openstack_networking_network_v2" "public" {
-  name = "public"
+  name = "main"
 }
 
-# 5) Floating IP 생성
+# 4) Floating IP 생성
 resource "openstack_networking_floatingip_v2" "public_ip" {
   pool = data.openstack_networking_network_v2.public.id
 }
 
-# 6) Floating IP → VM 포트 연결
+# 5) Floating IP → VM 포트 연결
 resource "openstack_networking_floatingip_associate_v2" "assoc" {
   floating_ip = openstack_networking_floatingip_v2.public_ip.address
   port_id     = openstack_compute_instance_v2.web.network[0].port
