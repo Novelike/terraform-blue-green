@@ -38,14 +38,19 @@ jobs:
       - name: Determine Active & Next Env
         id: determine
         run: |
-          VIP=$(terraform output -raw lb_vip)
-          echo "LB_VIP=$VIP" >> $GITHUB_ENV
-          # 헬스체크 통과하면 blue → green, 실패하면 green → blue
-          if curl -fs http://$VIP/hello; then
-            echo "NEXT_ENV=green"  >> $GITHUB_ENV
+          set +e
+          LB_VIP=$(terraform -chdir=terraform output -raw lb_vip)
+          echo "LB_VIP=$LB_VIP" >> $GITHUB_ENV
+
+          curl -fs http://$LB_VIP/hello
+          STATUS=$?
+          if [ $STATUS -eq 0 ]; then
+            echo "NEXT_ENV=green" >> $GITHUB_ENV
           else
-            echo "NEXT_ENV=blue"   >> $GITHUB_ENV
+            echo "NEXT_ENV=blue"  >> $GITHUB_ENV
           fi
+          set -e
+
 
       - name: Get Instance IPs
         id: get-ips
