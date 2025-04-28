@@ -1,0 +1,22 @@
+# Terraform 캐시 & 상태
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+
+# 민감 변수 파일
+terraform.tfvars
+*.tfvars
+
+# SSH 키 및 환경 설정
+*.pem
+*.key
+.env
+*.env
+
+# IDE 설정
+.vscode/
+.idea/
+
+# 기타 로그
+*.log
+
